@@ -92,7 +92,10 @@ print_banner() {
   printf '\n'
   printf "${B}================================================================${NC}\n"
   printf "${W}  EPUSDT INSTALL SUITE${NC}\n"
-  printf "${C}  鱼肥肥部署台  |  鱼肥肥 @pyufc${NC}\n"
+  printf "${C}  鱼肥肥部署台${NC}\n"
+  printf "${C}  Telegram : @pyufc${NC}\n"
+  printf "${C}  地址     : https://t.me/pyufc${NC}\n"
+  printf "${C}  仓库     : Yufeifeio/epusdt-Install${NC}\n"
   printf "${B}================================================================${NC}\n"
   printf '\n'
 }
@@ -107,6 +110,8 @@ menu_item() {
 support_info() {
   printf '\n'
   printf '鱼肥肥 @pyufc\n'
+  printf 'Telegram: https://t.me/pyufc\n'
+  printf 'Repo: https://github.com/Yufeifeio/epusdt-Install\n'
 }
 
 usage() {
@@ -743,6 +748,11 @@ update_release_files() {
 
   install -m 755 "${tmpdir}/epusdt" "${INSTALL_DIR}/epusdt"
   install -m 644 "${tmpdir}/.env.example" "${INSTALL_DIR}/.env.upstream.example"
+
+  # Remove generated and stale artifacts so the new version starts cleanly.
+  rm -rf "${INSTALL_DIR}/www"
+  rm -f "${INSTALL_DIR}/.env.example" "${INSTALL_DIR}/SHA256SUMS"
+  find "${INSTALL_DIR}" -maxdepth 1 -type f \( -name 'epusdt-*.tar.gz' -o -name 'SHA256SUMS*' \) -delete 2>/dev/null || true
 
   chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}"
 }
