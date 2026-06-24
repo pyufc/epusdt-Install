@@ -141,8 +141,8 @@ print_plain_banner() {
   printf "${B}================================================================${NC}\n"
   printf "${W}  EPUSDT 一键部署与运维脚本${NC}\n"
   printf "${C}  鱼肥肥 @pyufc${NC}\n"
-  printf "${C}  联系地址: https://t.me/pyufc${NC}\n"
-  printf "${C}  发布仓库: Yufeifeio/epusdt-Install${NC}\n"
+  printf "${C}  Telegram: https://t.me/pyufc${NC}\n"
+  printf "${C}  GitHub: Yufeifeio/epusdt-Install${NC}\n"
   printf "${B}================================================================${NC}\n"
   printf '\n'
 }
@@ -156,7 +156,7 @@ print_banner() {
   printf '\n'
   printf '%b\n' "${BM}╔══════════════════════════════════════════════════════════╗${NC}"
   printf '%b\n' "${BM}║             🐟 EPUSDT 一键部署与运维脚本              ║${NC}"
-  printf '%b\n' "${BM}║        鱼肥肥 @pyufc   联系: https://t.me/pyufc        ║${NC}"
+  printf '%b\n' "${BM}║      鱼肥肥 @pyufc   Telegram: https://t.me/pyufc      ║${NC}"
   printf '%b\n' "${BM}╚══════════════════════════════════════════════════════════╝${NC}"
   printf '%b\n' "${C}███████╗██████╗ ██╗   ██╗███████╗██████╗ ████████╗${NC}"
   printf '%b\n' "${C}██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗╚══██╔══╝${NC}"
@@ -164,7 +164,7 @@ print_banner() {
   printf '%b\n' "${C}██╔══╝  ██╔═══╝ ██║   ██║╚════██║██║  ██║   ██║   ${NC}"
   printf '%b\n' "${C}███████╗██║     ╚██████╔╝███████║██████╔╝   ██║   ${NC}"
   printf '%b\n' "${C}╚══════╝╚═╝      ╚═════╝ ╚══════╝╚═════╝    ╚═╝   ${NC}"
-  printf '%b\n' "${W}鱼肥肥 @pyufc  |  发布仓库: Yufeifeio/epusdt-Install${NC}"
+  printf '%b\n' "${W}鱼肥肥 @pyufc  |  GitHub: Yufeifeio/epusdt-Install${NC}"
   printf '\n'
 }
 
@@ -178,8 +178,8 @@ menu_item() {
 support_info() {
   printf '\n'
   printf '鱼肥肥 @pyufc\n'
-  printf '联系地址: https://t.me/pyufc\n'
-  printf '仓库地址: https://github.com/Yufeifeio/epusdt-Install\n'
+  printf 'Telegram: https://t.me/pyufc\n'
+  printf 'GitHub: https://github.com/Yufeifeio/epusdt-Install\n'
 }
 
 usage() {
@@ -2575,7 +2575,7 @@ menu_loop() {
     print_banner
     menu_item "1" "开始部署" "填域名自动 HTTPS，回显账号密码"
     menu_item "2" "接管旧实例" "保留原数据并纳入脚本托管"
-    menu_item "3" "一键更新" "拉取官方最新 release"
+    menu_item "3" "一键更新" "拉取官方最新版本"
     menu_item "4" "运行管理" "状态 / 日志 / 启停 / 补配 HTTPS"
     menu_item "5" "实例信息" "目录 / 版本 / 地址 / 服务状态"
     menu_item "6" "一键自检" "服务 / 端口 / HTTPS / 解析"

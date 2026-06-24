@@ -13,15 +13,6 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/main/install.sh)
 ```
 
-运行后按菜单选择部署、接管、更新、管理、自检、查看信息或卸载。
-遇到访问异常时，先进菜单选择“一键自检”，脚本会显示服务、端口、Nginx、域名和 HTTPS 哪一项不正常。
-
-直接自检：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/main/install.sh) doctor
-```
-
 ## 🧩 功能亮点
 
 | 功能 | 说明 |
@@ -38,14 +29,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 
 ## ⚡ 部署说明
 
-安装目录必须是独立目录，例如：
+安装目录建议使用独立目录，例如：
 
 ```bash
 /www/wwwroot/epusdt
 ```
 
-不要使用 `/www/wwwroot`、`/opt`、`/var/www` 这类系统目录或站点根目录。
-如果显式指定一个新目录，脚本不会继承旧实例的域名、端口或 Nginx 配置，避免误改已有站点。
+不要使用 `/www/wwwroot`、`/opt`、`/var/www` 这类系统目录或站点根目录，避免覆盖或误删其他站点数据。
 
 ## 🧲 接管旧实例
 
