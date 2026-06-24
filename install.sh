@@ -21,6 +21,12 @@ suggest_install_dir() {
     printf '%s' "${state_dir}"
     return 0
   fi
+  for candidate in /www/wwwroot/epusdt /opt/epusdt; do
+    if [[ -f "${candidate}/epusdt" || -f "${candidate}/.env" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
   printf '%s' "/opt/epusdt"
 }
 
@@ -95,7 +101,7 @@ fi
 declare -a ADOPT_ACTIONS=()
 
 info() { printf "${C}[信息]${NC} %s\n" "$1"; }
-warn() { printf "${Y}[警告]${NC} %s\n" "$1"; }
+warn() { printf "${Y}[警告]${NC} %s\n" "$1" >&2; }
 success() { printf "${G}[完成]${NC} %s\n" "$1"; }
 error() { printf "${R}[失败]${NC} %s\n" "$1" >&2; }
 die() { error "$1"; exit 1; }
@@ -304,15 +310,23 @@ prefer_saved_install_dir() {
   if [[ "${INSTALL_DIR_EXPLICIT}" -eq 0 ]] && ! has_installation_in_dir; then
     if [[ -n "${state_dir}" && ( -x "${state_dir}/epusdt" || -f "${state_dir}/.env" || -d "${state_dir}/runtime" ) ]]; then
       INSTALL_DIR="${state_dir}"
+      return 0
     fi
+    for candidate in /www/wwwroot/epusdt /opt/epusdt; do
+      if [[ -x "${candidate}/epusdt" || -f "${candidate}/.env" || -d "${candidate}/runtime" ]]; then
+        INSTALL_DIR="${candidate}"
+        return 0
+      fi
+    done
   fi
 }
 
 ensure_existing_instance() {
+  prefer_saved_install_dir
   if service_exists || has_installation_in_dir; then
     return 0
   fi
-  die "未识别到可管理的实例，请先执行安装，或使用 --install-dir 指定正确目录"
+  die "未识别到可管理的实例。请先执行安装，或使用 --install-dir 指定正确目录，例如 --install-dir /www/wwwroot/epusdt"
 }
 
 require_existing_installation_files() {
@@ -361,6 +375,33 @@ prompt_default() {
   fi
 }
 
+prompt_menu_choice() {
+  local prompt="$1"
+  local choices="$2"
+  local answer=""
+
+  while true; do
+    printf '%s: ' "${prompt}" >&2
+    if ! read -r answer; then
+      printf '\n' >&2
+      return 1
+    fi
+    answer="$(trim "${answer}")"
+
+    if [[ -z "${answer}" ]]; then
+      warn "请输入编号：${choices}"
+      continue
+    fi
+
+    if [[ " ${choices} " == *" ${answer} "* ]]; then
+      printf '%s' "${answer}"
+      return 0
+    fi
+
+    warn "无效编号: ${answer}，可选：${choices}"
+  done
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-1}"
@@ -389,7 +430,7 @@ prompt_yes_no() {
 }
 
 pause_if_interactive() {
-  if [[ "${FROM_MENU}" -eq 1 ]]; then
+  if [[ "${FROM_MENU}" -eq 1 && -t 0 ]]; then
     printf '\n'
     read -r -p "按回车继续..." _dummy
   fi
@@ -1647,6 +1688,7 @@ do_uninstall() {
   local cert_dir=""
   local acme_webroot=""
   local removed_nginx=0
+  local confirm_uninstall=0
 
   cert_dir="/etc/ssl/epusdt/${DOMAIN}"
   acme_webroot="/www/wwwroot/_acme/${DOMAIN}"
@@ -1660,6 +1702,12 @@ do_uninstall() {
     [[ -n "${ACCESS_URL}" ]] && printf '访问地址: %s\n' "${ACCESS_URL}"
     [[ -n "${DOMAIN}" ]] && printf '域名: %s\n' "${DOMAIN}"
     print_line
+    if prompt_yes_no "确认执行卸载" 0; then
+      confirm_uninstall=1
+    else
+      warn "已取消卸载，未做任何更改"
+      return 0
+    fi
     prompt_yes_no "删除安装目录和全部数据" 1 && remove_dir=1 || remove_dir=0
     if [[ -n "${DOMAIN}" ]]; then
       prompt_yes_no "删除 HTTPS 配置和证书" 1 && remove_https=1 || remove_https=0
@@ -1669,7 +1717,10 @@ do_uninstall() {
     prompt_yes_no "删除服务用户 ${SERVICE_USER}" 1 && remove_user=1 || remove_user=0
   else
     [[ "${FORCE}" -eq 1 ]] || die "非交互卸载请加 --force"
+    confirm_uninstall=1
   fi
+
+  [[ "${confirm_uninstall}" -eq 1 ]] || return 0
 
   if service_exists; then
     systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
@@ -1763,7 +1814,7 @@ menu_manage() {
     printf '\n'
 
     local mgmt=""
-    mgmt="$(prompt_default "请选择" "1")"
+    mgmt="$(prompt_menu_choice "请选择编号" "0 1 2 3 4 5 6")"
     case "${mgmt}" in
       1) do_status ;;
       2) do_logs ;;
@@ -1791,7 +1842,7 @@ menu_loop() {
     printf '\n'
 
     local choice=""
-    choice="$(prompt_default "请选择" "1")"
+    choice="$(prompt_menu_choice "请选择编号" "0 1 2 3 4 5 6")"
     case "${choice}" in
       1)
         FROM_MENU=1
