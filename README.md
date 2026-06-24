@@ -26,6 +26,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 | 🛠️ 日常管理 | 状态、日志、启动、停止、重启 |
 | 🧹 一键卸载 | 删除服务、部署目录、证书与 Nginx 配置 |
 | ♻️ 开机自启 | 全新安装或接管后自动写入 `systemd` 并启用 |
+| 🛡️ 安全保护 | 拒绝覆盖残留数据目录，拒绝使用系统目录或站点根目录 |
+
+## ⚡ 部署说明
+
+安装目录必须是独立目录，例如：
+
+```bash
+/www/wwwroot/epusdt
+```
+
+不要使用 `/www/wwwroot`、`/opt`、`/var/www` 这类系统目录或站点根目录。
+如果显式指定一个新目录，脚本不会继承旧实例的域名、端口或 Nginx 配置，避免误改已有站点。
 
 ## 🧲 接管旧实例
 

@@ -214,20 +214,26 @@ cleanup_tmpdir() {
   fi
 }
 
+require_option_value() {
+  local option="$1"
+  local value="${2:-}"
+  [[ -n "${value}" && "${value}" != --* ]] || die "参数 ${option} 缺少值"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --install-dir) INSTALL_DIR="$2"; INSTALL_DIR_EXPLICIT=1; shift 2 ;;
-    --service-name) SERVICE_NAME="$2"; SERVICE_NAME_EXPLICIT=1; shift 2 ;;
-    --service-user) SERVICE_USER="$2"; SERVICE_USER_EXPLICIT=1; shift 2 ;;
-    --service-group) SERVICE_GROUP="$2"; SERVICE_GROUP_EXPLICIT=1; shift 2 ;;
-    --version) VERSION="$2"; VERSION_EXPLICIT=1; shift 2 ;;
-    --domain) DOMAIN="$2"; DOMAIN_EXPLICIT=1; shift 2 ;;
-    --port) PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
-    --bind-addr) BIND_ADDR="$2"; BIND_ADDR_EXPLICIT=1; shift 2 ;;
-    --app-name) APP_NAME="$2"; APP_NAME_EXPLICIT=1; shift 2 ;;
-    --api-rate-url) API_RATE_URL="$2"; API_RATE_URL_EXPLICIT=1; shift 2 ;;
-    --nginx-conf-path) NGINX_CONF_PATH="$2"; NGINX_CONF_PATH_EXPLICIT=1; shift 2 ;;
-    --acme-email) ACME_EMAIL="$2"; ACME_EMAIL_EXPLICIT=1; shift 2 ;;
+    --install-dir) require_option_value "$1" "${2:-}"; INSTALL_DIR="$2"; INSTALL_DIR_EXPLICIT=1; shift 2 ;;
+    --service-name) require_option_value "$1" "${2:-}"; SERVICE_NAME="$2"; SERVICE_NAME_EXPLICIT=1; shift 2 ;;
+    --service-user) require_option_value "$1" "${2:-}"; SERVICE_USER="$2"; SERVICE_USER_EXPLICIT=1; shift 2 ;;
+    --service-group) require_option_value "$1" "${2:-}"; SERVICE_GROUP="$2"; SERVICE_GROUP_EXPLICIT=1; shift 2 ;;
+    --version) require_option_value "$1" "${2:-}"; VERSION="$2"; VERSION_EXPLICIT=1; shift 2 ;;
+    --domain) require_option_value "$1" "${2:-}"; DOMAIN="$2"; DOMAIN_EXPLICIT=1; shift 2 ;;
+    --port) require_option_value "$1" "${2:-}"; PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
+    --bind-addr) require_option_value "$1" "${2:-}"; BIND_ADDR="$2"; BIND_ADDR_EXPLICIT=1; shift 2 ;;
+    --app-name) require_option_value "$1" "${2:-}"; APP_NAME="$2"; APP_NAME_EXPLICIT=1; shift 2 ;;
+    --api-rate-url) require_option_value "$1" "${2:-}"; API_RATE_URL="$2"; API_RATE_URL_EXPLICIT=1; shift 2 ;;
+    --nginx-conf-path) require_option_value "$1" "${2:-}"; NGINX_CONF_PATH="$2"; NGINX_CONF_PATH_EXPLICIT=1; shift 2 ;;
+    --acme-email) require_option_value "$1" "${2:-}"; ACME_EMAIL="$2"; ACME_EMAIL_EXPLICIT=1; shift 2 ;;
     --non-interactive) NON_INTERACTIVE=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -283,6 +289,11 @@ validate_install_dir() {
   [[ -n "${value}" ]] || die "安装目录不能为空"
   [[ "${value}" == /* ]] || die "安装目录必须是绝对路径: ${value}"
   [[ "${value}" != "/" ]] || die "安装目录不能是根目录 /"
+  case "${value}" in
+    /bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/sys|/tmp|/usr|/var|/www|/www/wwwroot|/var/www|/var/www/html)
+      die "安装目录不能使用系统或站点根目录: ${value}，请使用独立目录，例如 /www/wwwroot/epusdt"
+      ;;
+  esac
   [[ ! "${value}" =~ [[:space:]] ]] || die "安装目录不能包含空格，请换一个不带空格的路径: ${value}"
 }
 
@@ -307,15 +318,62 @@ service_exists_name() {
   systemctl cat "${service_name}.service" >/dev/null 2>&1
 }
 
+service_working_directory() {
+  local value=""
+  service_exists || return 1
+  value="$(systemctl show -p WorkingDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ -n "${value}" && "${value}" != "/" ]] || return 1
+  printf '%s' "${value}"
+}
+
 has_installation_in_dir() {
   [[ -x "${INSTALL_DIR}/epusdt" || -f "${INSTALL_DIR}/.env" || -d "${INSTALL_DIR}/runtime" ]]
 }
 
-prefer_saved_install_dir() {
+has_existing_install_artifacts() {
+  [[ -e "${INSTALL_DIR}/epusdt" || -f "${INSTALL_DIR}/.env" || -d "${INSTALL_DIR}/runtime" || -d "${INSTALL_DIR}/www" || -d "${INSTALL_DIR}/.old_versions" ]]
+}
+
+install_dir_matches_saved_state() {
   local state_dir="${EPUSDT_INSTALL_DIR:-}"
+  [[ -n "${state_dir}" && "${INSTALL_DIR}" == "${state_dir}" ]]
+}
+
+reset_inherited_state_for_new_install_dir() {
+  [[ "${INSTALL_DIR_EXPLICIT}" -eq 1 ]] || return 0
+  install_dir_matches_saved_state && return 0
+
+  if [[ "${DOMAIN_EXPLICIT}" -eq 0 ]]; then
+    DOMAIN=""
+  fi
+  if [[ "${PORT_EXPLICIT}" -eq 0 ]]; then
+    PORT=""
+  fi
+  if [[ "${BIND_ADDR_EXPLICIT}" -eq 0 ]]; then
+    BIND_ADDR=""
+  fi
+  if [[ "${API_RATE_URL_EXPLICIT}" -eq 0 ]]; then
+    API_RATE_URL=""
+  fi
+  if [[ "${NGINX_CONF_PATH_EXPLICIT}" -eq 0 ]]; then
+    NGINX_CONF_PATH=""
+  fi
+  if [[ "${ACME_EMAIL_EXPLICIT}" -eq 0 ]]; then
+    ACME_EMAIL=""
+  fi
+  ACCESS_URL=""
+}
+
+prefer_saved_install_dir() {
+  local state_dir="${EPUSDT_INSTALL_DIR:-}" unit_dir=""
   if [[ "${INSTALL_DIR_EXPLICIT}" -eq 0 ]] && ! has_installation_in_dir; then
     if [[ -n "${state_dir}" && ( -x "${state_dir}/epusdt" || -f "${state_dir}/.env" || -d "${state_dir}/runtime" ) ]]; then
       INSTALL_DIR="${state_dir}"
+      return 0
+    fi
+    unit_dir="$(service_working_directory || true)"
+    if [[ -n "${unit_dir}" && ( -x "${unit_dir}/epusdt" || -f "${unit_dir}/.env" || -d "${unit_dir}/runtime" ) ]]; then
+      INSTALL_DIR="${unit_dir}"
       return 0
     fi
     for candidate in /www/wwwroot/epusdt /opt/epusdt; do
@@ -329,8 +387,11 @@ prefer_saved_install_dir() {
 
 ensure_existing_instance() {
   prefer_saved_install_dir
-  if service_exists || has_installation_in_dir; then
+  if has_installation_in_dir; then
     return 0
+  fi
+  if service_exists; then
+    die "检测到服务 ${SERVICE_NAME}，但未能识别安装目录。请使用 --install-dir 指定真实目录后重试"
   fi
   die "未识别到可管理的实例。请先执行安装，或使用 --install-dir 指定正确目录，例如 --install-dir /www/wwwroot/epusdt"
 }
@@ -816,8 +877,14 @@ prepare_install_values() {
     INSTALL_DIR="$(suggest_install_dir)"
   fi
 
+  reset_inherited_state_for_new_install_dir
+
   if [[ -z "${PORT}" ]]; then
     PORT="$(find_available_port 8000)"
+  elif [[ "${PORT_EXPLICIT}" -eq 0 && -z "${DOMAIN}" ]]; then
+    if port_in_use "${PORT}" && ! has_installation_in_dir; then
+      PORT="$(find_available_port "${PORT}")"
+    fi
   fi
 
   if [[ "${NON_INTERACTIVE}" -eq 0 && ( "${COMMAND}" == "install" || "${FROM_MENU}" -eq 1 ) ]]; then
@@ -899,7 +966,7 @@ prepare_adopt_values() {
     die "检测到当前实例仍处于安装模式，请先完成现有安装流程后再接管"
   fi
 
-  VERSION="$("${INSTALL_DIR}/epusdt" version 2>/dev/null | sed -n 's/^version: //p' | head -n1 || true)"
+  VERSION="$(epusdt_version_output 2>/dev/null | sed -n 's/^version: //p' | head -n1 || true)"
   [[ -n "${VERSION}" ]] || VERSION="unknown"
 }
 
@@ -1355,21 +1422,25 @@ port_listener_pids() {
   fi
 }
 
+service_port_owner_matches() {
+  local main_pid pids pid
+  [[ -n "${PORT}" ]] || return 0
+  main_pid="$(service_main_pid)"
+  [[ -n "${main_pid}" && "${main_pid}" != "0" ]] || return 1
+  pids="$(port_listener_pids "${PORT}")"
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    [[ "${pid}" == "${main_pid}" ]] && return 0
+  done <<< "${pids}"
+  return 1
+}
+
 ensure_service_owns_port() {
   local main_pid pids pid listeners attempt=1
   [[ -n "${PORT}" ]] || return 0
 
   while (( attempt <= 30 )); do
-    main_pid="$(service_main_pid)"
-    if [[ -n "${main_pid}" && "${main_pid}" != "0" ]]; then
-      pids="$(port_listener_pids "${PORT}")"
-      while IFS= read -r pid; do
-        [[ -n "${pid}" ]] || continue
-        if [[ "${pid}" == "${main_pid}" ]]; then
-          return 0
-        fi
-      done <<< "${pids}"
-    fi
+    service_port_owner_matches && return 0
     sleep 1
     attempt=$((attempt + 1))
   done
@@ -1377,6 +1448,13 @@ ensure_service_owns_port() {
   listeners="$(port_listeners "${PORT}")"
   main_pid="$(service_main_pid)"
   die "服务已启动，但端口 ${PORT} 不是由 systemd 主进程 ${main_pid:-未知} 监听。当前监听信息：${listeners:-未发现监听}"
+}
+
+warn_if_service_port_not_owned() {
+  [[ -n "${PORT}" ]] || return 0
+  service_port_owner_matches && return 0
+  warn "服务状态可能异常：端口 ${PORT} 不是由 ${SERVICE_NAME}.service 主进程监听"
+  port_listeners "${PORT}" >&2 || true
 }
 
 install_release_files() {
@@ -1870,15 +1948,15 @@ do_install() {
   fi
 
   validate_install_dir "${INSTALL_DIR}"
-  if [[ -f "${INSTALL_DIR}/epusdt" && "${FORCE}" -ne 1 ]]; then
+  if has_existing_install_artifacts && [[ "${FORCE}" -ne 1 ]]; then
     if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
-      warn "${INSTALL_DIR} 已存在 epusdt，不建议覆盖重装"
+      warn "${INSTALL_DIR} 已存在 Epusdt 相关文件，不建议覆盖重装"
       if [[ -f "${INSTALL_DIR}/.env" ]] && prompt_yes_no "改为接管旧实例并保留数据" 1; then
         adopt_current_instance
         return 0
       fi
     fi
-    die "${INSTALL_DIR} 已存在 epusdt。请选择接管旧实例或一键更新；如果确认覆盖重装请加 --force"
+    die "${INSTALL_DIR} 已存在 Epusdt 相关文件。请选择接管旧实例或一键更新；如果确认覆盖重装请加 --force"
   fi
 
   prepare_install_values
@@ -1906,6 +1984,7 @@ do_install() {
   enable_https_if_needed
   prepare_instance_for_update_restart
   systemctl restart "${SERVICE_NAME}.service"
+  ensure_service_owns_port
   wait_for_app_api
 
   admin_info="$(fetch_initial_admin_credentials)"
@@ -1950,6 +2029,7 @@ do_update() {
   if [[ -n "${installed_version}" && "${installed_version}" == "${VERSION}" ]]; then
     prepare_instance_for_service_start
     systemctl restart "${SERVICE_NAME}.service"
+    ensure_service_owns_port
     wait_for_app_api
     success "当前已是最新版: ${VERSION}"
     save_state
@@ -1969,6 +2049,7 @@ do_update() {
   update_release_files "${tmpdir}"
   prepare_instance_for_update_restart
   systemctl restart "${SERVICE_NAME}.service"
+  ensure_service_owns_port
 
   if [[ -n "${PORT}" ]] && wait_for_http "http://127.0.0.1:${PORT}/admin/api/v1/auth/init-password-hash" 40; then
     success "已更新到 ${VERSION}"
@@ -1996,6 +2077,7 @@ do_https() {
 
   systemctl restart "${SERVICE_NAME}.service"
 
+  ensure_service_owns_port
   wait_for_app_api
   enable_https_if_needed
   save_state
@@ -2012,15 +2094,18 @@ do_uninstall() {
   validate_runtime_settings
 
   local remove_dir=1
-  local remove_https=1
+  local remove_https=0
   local remove_user=1
   local cert_dir=""
   local acme_webroot=""
   local removed_nginx=0
   local confirm_uninstall=0
 
-  cert_dir="/etc/ssl/epusdt/${DOMAIN}"
-  acme_webroot="/www/wwwroot/_acme/${DOMAIN}"
+  if [[ -n "${DOMAIN}" ]]; then
+    remove_https=1
+    cert_dir="/etc/ssl/epusdt/${DOMAIN}"
+    acme_webroot="/www/wwwroot/_acme/${DOMAIN}"
+  fi
 
   if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
     print_banner
@@ -2094,8 +2179,10 @@ do_uninstall() {
 do_start() {
   require_root
   require_systemd
+  load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
   systemctl start "${SERVICE_NAME}.service"
+  ensure_service_owns_port
   success "服务已启动: ${SERVICE_NAME}"
   support_info
 }
@@ -2103,8 +2190,10 @@ do_start() {
 do_restart() {
   require_root
   require_systemd
+  load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
   systemctl restart "${SERVICE_NAME}.service"
+  ensure_service_owns_port
   success "服务已重启: ${SERVICE_NAME}"
   support_info
 }
@@ -2120,8 +2209,10 @@ do_stop() {
 
 do_status() {
   require_systemd
+  load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
   systemctl status "${SERVICE_NAME}.service" --no-pager
+  warn_if_service_port_not_owned
 }
 
 do_logs() {
