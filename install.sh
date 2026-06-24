@@ -565,6 +565,18 @@ detect_public_ip() {
   detect_local_ip
 }
 
+ensure_acme_email() {
+  if [[ -n "${ACME_EMAIL}" ]]; then
+    return 0
+  fi
+
+  if [[ -n "${DOMAIN}" ]]; then
+    ACME_EMAIL="admin@${DOMAIN}"
+  else
+    ACME_EMAIL="admin@epusdt.local"
+  fi
+}
+
 resolve_domain_ipv4s() {
   local domain_name="$1"
   if command_exists getent; then
@@ -728,9 +740,6 @@ prepare_install_values() {
     DOMAIN="$(prompt_default "域名（留空则端口访问）" "${DOMAIN}")"
     PORT="$(prompt_default "监听端口" "${PORT}")"
     APP_NAME="$(prompt_default "应用名称" "${APP_NAME}")"
-    if [[ -n "${DOMAIN}" ]]; then
-      ACME_EMAIL="$(prompt_default "证书邮箱" "${ACME_EMAIL}")"
-    fi
   fi
 
   resolve_group
@@ -740,7 +749,7 @@ prepare_install_values() {
   if [[ -n "${DOMAIN}" ]]; then
     WITH_NGINX="1"
     BIND_ADDR="127.0.0.1"
-    [[ -n "${ACME_EMAIL}" ]] || die "配置域名时必须提供证书邮箱"
+    ensure_acme_email
     validate_domain_for_https
     APP_URI="https://${DOMAIN}"
     ACCESS_URL="${APP_URI}"
@@ -810,11 +819,10 @@ prepare_https_values() {
 
   if [[ "${NON_INTERACTIVE}" -eq 0 && ( "${COMMAND}" == "https" || "${FROM_MENU}" -eq 1 ) ]]; then
     DOMAIN="$(prompt_default "域名" "${DOMAIN}")"
-    ACME_EMAIL="$(prompt_default "证书邮箱" "${ACME_EMAIL}")"
   fi
 
   [[ -n "${DOMAIN}" ]] || die "请先提供域名"
-  [[ -n "${ACME_EMAIL}" ]] || die "请先提供证书邮箱"
+  ensure_acme_email
   [[ -n "${PORT}" ]] || PORT="$(find_available_port 8000)"
   resolve_group
   validate_runtime_settings
