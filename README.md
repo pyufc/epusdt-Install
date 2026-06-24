@@ -13,7 +13,14 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/main/install.sh)
 ```
 
-运行后按菜单选择部署、接管、更新、管理、查看信息或卸载。
+运行后按菜单选择部署、接管、更新、管理、自检、查看信息或卸载。
+遇到访问异常时，先进菜单选择“一键自检”，脚本会显示服务、端口、Nginx、域名和 HTTPS 哪一项不正常。
+
+直接自检：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/main/install.sh) doctor
+```
 
 ## 🧩 功能亮点
 
@@ -24,6 +31,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 | 🧲 接管旧实例 | 保留原有 `.env` 和 `sqlite` 数据，迁移到脚本托管 |
 | 🔐 HTTPS | 部署时填写域名即可自动申请证书、配置反代、强制 HTTPS |
 | 🛠️ 日常管理 | 状态、日志、启动、停止、重启 |
+| 🩺 一键自检 | 检查服务、开机自启、端口归属、应用接口、域名解析和 HTTPS |
 | 🧹 一键卸载 | 删除服务、部署目录、证书与 Nginx 配置 |
 | ♻️ 开机自启 | 全新安装或接管后自动写入 `systemd` 并启用 |
 | 🛡️ 安全保护 | 拒绝覆盖残留数据目录，拒绝使用系统目录或站点根目录 |

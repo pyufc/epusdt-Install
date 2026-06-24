@@ -15,7 +15,11 @@ fi
 suggest_install_dir() {
   local state_dir="${EPUSDT_INSTALL_DIR:-}"
   local cwd="${ORIGINAL_PWD:-}"
-  if [[ -n "${cwd}" && "${cwd}" != "/" && "${cwd}" != "/root" && ! "${cwd}" =~ [[:space:]] ]]; then
+  local cwd_base=""
+  cwd_base="$(basename "${cwd}" 2>/dev/null || true)"
+
+  if [[ -n "${cwd}" && "${cwd}" != "/" && "${cwd}" != "/root" && ! "${cwd}" =~ [[:space:]] ]] &&
+    [[ -f "${cwd}/epusdt" || -f "${cwd}/.env" || -d "${cwd}/runtime" || "${cwd_base}" == "epusdt" ]]; then
     printf '%s' "${cwd}"
     return 0
   fi
@@ -112,6 +116,15 @@ success() { printf "${G}[完成]${NC} %s\n" "$1"; }
 error() { printf "${R}[失败]${NC} %s\n" "$1" >&2; }
 die() { error "$1"; exit 1; }
 
+on_unexpected_error() {
+  local code="$1"
+  local line="$2"
+  error "脚本执行中断，退出码 ${code}，位置 ${line}。请先查看上方最后一条错误，处理后重新运行。"
+  exit "${code}"
+}
+
+trap 'on_unexpected_error "$?" "$LINENO"' ERR
+
 print_line() {
   printf '%s\n' "================================================================"
 }
@@ -177,6 +190,7 @@ usage() {
   bash install.sh install [参数]
   bash install.sh adopt [参数]
   bash install.sh update [参数]
+  bash install.sh doctor
   bash install.sh info
   bash install.sh uninstall [参数]
   bash install.sh start
@@ -241,6 +255,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+SERVICE_NAME="${SERVICE_NAME%.service}"
+
 command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -298,6 +314,10 @@ validate_install_dir() {
 }
 
 validate_runtime_settings() {
+  SERVICE_NAME="${SERVICE_NAME%.service}"
+  if [[ "${SERVICE_USER_EXPLICIT}" -eq 1 && "${SERVICE_GROUP_EXPLICIT}" -eq 0 ]]; then
+    SERVICE_GROUP="${SERVICE_USER}"
+  fi
   validate_install_dir "${INSTALL_DIR}"
   validate_service_name "${SERVICE_NAME}"
   validate_account_name "服务用户" "${SERVICE_USER}"
@@ -326,6 +346,48 @@ service_working_directory() {
   printf '%s' "${value}"
 }
 
+ensure_service_directory_matches() {
+  local unit_dir=""
+  service_exists || return 0
+  unit_dir="$(service_working_directory || true)"
+
+  if [[ -z "${unit_dir}" ]]; then
+    die "服务 ${SERVICE_NAME} 缺少 WorkingDirectory，无法确认是否属于当前实例"
+  fi
+
+  if [[ "${unit_dir}" != "${INSTALL_DIR}" ]]; then
+    die "服务 ${SERVICE_NAME} 指向 ${unit_dir}，不是当前目录 ${INSTALL_DIR}。请指定正确 --service-name，避免误操作其他实例"
+  fi
+}
+
+load_service_state_from_unit() {
+  local value=""
+  service_exists || return 0
+
+  if [[ "${INSTALL_DIR_EXPLICIT}" -eq 0 ]]; then
+    value="$(systemctl show -p WorkingDirectory --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    if [[ -n "${value}" && "${value}" != "/" ]]; then
+      INSTALL_DIR="${value}"
+    fi
+  fi
+
+  if [[ "${SERVICE_USER_EXPLICIT}" -eq 0 ]]; then
+    value="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    if [[ -n "${value}" && "${value}" != "root" ]]; then
+      SERVICE_USER="${value}"
+    fi
+  fi
+
+  if [[ "${SERVICE_GROUP_EXPLICIT}" -eq 0 ]]; then
+    value="$(systemctl show -p Group --value "${SERVICE_NAME}.service" 2>/dev/null || true)"
+    if [[ -n "${value}" && "${value}" != "root" ]]; then
+      SERVICE_GROUP="${value}"
+    elif id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+      SERVICE_GROUP="$(id -gn "${SERVICE_USER}")"
+    fi
+  fi
+}
+
 has_installation_in_dir() {
   [[ -x "${INSTALL_DIR}/epusdt" || -f "${INSTALL_DIR}/.env" || -d "${INSTALL_DIR}/runtime" ]]
 }
@@ -339,9 +401,21 @@ install_dir_matches_saved_state() {
   [[ -n "${state_dir}" && "${INSTALL_DIR}" == "${state_dir}" ]]
 }
 
+service_name_matches_saved_state() {
+  local state_service="${EPUSDT_SERVICE_NAME:-}"
+  [[ -n "${state_service}" && "${SERVICE_NAME}" == "${state_service}" ]]
+}
+
 reset_inherited_state_for_new_install_dir() {
-  [[ "${INSTALL_DIR_EXPLICIT}" -eq 1 ]] || return 0
-  install_dir_matches_saved_state && return 0
+  local should_reset=0
+
+  if [[ "${INSTALL_DIR_EXPLICIT}" -eq 1 ]] && ! install_dir_matches_saved_state; then
+    should_reset=1
+  fi
+  if [[ "${SERVICE_NAME_EXPLICIT}" -eq 1 ]] && ! service_name_matches_saved_state; then
+    should_reset=1
+  fi
+  [[ "${should_reset}" -eq 1 ]] || return 0
 
   if [[ "${DOMAIN_EXPLICIT}" -eq 0 ]]; then
     DOMAIN=""
@@ -391,7 +465,12 @@ ensure_existing_instance() {
     return 0
   fi
   if service_exists; then
-    die "检测到服务 ${SERVICE_NAME}，但未能识别安装目录。请使用 --install-dir 指定真实目录后重试"
+    local unit_dir=""
+    unit_dir="$(service_working_directory || true)"
+    if [[ -n "${unit_dir}" ]]; then
+      die "指定目录 ${INSTALL_DIR} 不是可管理实例；当前服务 ${SERVICE_NAME} 实际指向 ${unit_dir}。请使用正确 --install-dir，或指定正确 --service-name"
+    fi
+    die "检测到服务 ${SERVICE_NAME}，但未能识别安装目录。请检查服务文件 WorkingDirectory，或使用正确 --install-dir 和 --service-name"
   fi
   die "未识别到可管理的实例。请先执行安装，或使用 --install-dir 指定正确目录，例如 --install-dir /www/wwwroot/epusdt"
 }
@@ -479,21 +558,27 @@ prompt_yes_no() {
     hint="y/N"
   fi
 
-  printf '%s [%s]: ' "${prompt}" "${hint}" >&2
-  read -r answer
-  answer="$(trim "${answer}")"
-  answer="${answer,,}"
+  while true; do
+    printf '%s [%s]: ' "${prompt}" "${hint}" >&2
+    if ! read -r answer; then
+      printf '\n' >&2
+      [[ "${default}" == "1" ]]
+      return
+    fi
+    answer="$(trim "${answer}")"
+    answer="${answer,,}"
 
-  if [[ -z "${answer}" ]]; then
-    [[ "${default}" == "1" ]]
-    return
-  fi
+    if [[ -z "${answer}" ]]; then
+      [[ "${default}" == "1" ]]
+      return
+    fi
 
-  case "${answer}" in
-    y|yes|1) return 0 ;;
-    n|no|0) return 1 ;;
-    *) [[ "${default}" == "1" ]] ;;
-  esac
+    case "${answer}" in
+      y|yes|1) return 0 ;;
+      n|no|0) return 1 ;;
+      *) warn "请输入 y 或 n" ;;
+    esac
+  done
 }
 
 pause_if_interactive() {
@@ -560,7 +645,19 @@ save_state() {
 }
 
 clear_state_file() {
-  rm -f "${STATE_FILE}"
+  local saved_dir="" saved_service=""
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    return 0
+  fi
+
+  saved_dir="$(bash -c "source '${STATE_FILE}'; printf '%s' \"\${EPUSDT_INSTALL_DIR:-}\"" 2>/dev/null || true)"
+  saved_service="$(bash -c "source '${STATE_FILE}'; printf '%s' \"\${EPUSDT_SERVICE_NAME:-}\"" 2>/dev/null || true)"
+
+  if [[ "${saved_dir}" == "${INSTALL_DIR}" && "${saved_service}" == "${SERVICE_NAME}" ]]; then
+    rm -f "${STATE_FILE}"
+  else
+    warn "状态文件属于其他实例，已保留: ${STATE_FILE}"
+  fi
 }
 
 require_root() {
@@ -624,7 +721,7 @@ install_packages() {
   fi
 
   if [[ "${#packages[@]}" -eq 3 ]]; then
-    info "基础依赖已满足，跳过额外软件安装"
+    info "检查基础依赖"
   fi
 
   case "${pm}" in
@@ -831,6 +928,8 @@ resolve_group() {
 }
 
 load_runtime_state_from_env() {
+  reset_inherited_state_for_new_install_dir
+  load_service_state_from_unit
   prefer_saved_install_dir
   local env_file="${INSTALL_DIR}/.env"
   local uri host port_from_env bind_from_env app_name_from_env api_rate_from_env
@@ -1174,13 +1273,27 @@ EOF
 }
 
 stop_conflicting_instance_processes() {
-  local pids=""
+  local pids="" listener_pids="" pid exe_path cwd_path cmdline
   pids="$(
     {
       pgrep -f "${INSTALL_DIR}/epusdt --config ${INSTALL_DIR} http start" || true
       pgrep -f "${INSTALL_DIR}/epusdt http start" || true
     } | awk '!seen[$0]++'
   )"
+
+  if [[ -n "${PORT}" ]]; then
+    listener_pids="$(port_listener_pids "${PORT}" || true)"
+    while IFS= read -r pid; do
+      [[ -n "${pid}" && -d "/proc/${pid}" ]] || continue
+      exe_path="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
+      cwd_path="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+      cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+      if [[ "${exe_path}" == "${INSTALL_DIR}/epusdt" || "${cwd_path}" == "${INSTALL_DIR}" || "${cmdline}" == *"${INSTALL_DIR}"* ]]; then
+        pids="$(printf '%s\n%s\n' "${pids}" "${pid}" | awk 'NF && !seen[$0]++')"
+      fi
+    done <<< "${listener_pids}"
+  fi
+
   [[ -n "${pids}" ]] || return 0
 
   info "发现旧的手动运行进程，准备切换为 systemd 托管"
@@ -1198,6 +1311,7 @@ stop_conflicting_instance_processes() {
       pgrep -f "${INSTALL_DIR}/epusdt http start" || true
     } | awk '!seen[$0]++'
   )"
+
   if [[ -n "${pids}" ]]; then
     while IFS= read -r pid; do
       [[ -n "${pid}" ]] || continue
@@ -1592,8 +1706,19 @@ prepare_instance_for_service_start() {
 }
 
 prepare_instance_for_update_restart() {
+  cleanup_safe_install_artifacts
   reset_generated_static_files
   repair_install_permissions
+}
+
+should_remove_service_user_by_default() {
+  case "${SERVICE_USER}" in
+    root|www|www-data|nginx|apache|httpd|nobody)
+      return 1
+      ;;
+  esac
+
+  [[ "${SERVICE_USER}" == "${SERVICE_NAME}" || "${SERVICE_USER}" == epusdt* ]]
 }
 
 wait_for_http() {
@@ -1612,6 +1737,22 @@ wait_for_http() {
   done
 
   return 1
+}
+
+http_code() {
+  local url="$1"
+  local code=""
+  code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 15 "${url}" 2>/dev/null || true)"
+  [[ "${code}" =~ ^[0-9]{3}$ ]] || code="000"
+  printf '%s' "${code}"
+}
+
+http_code_insecure() {
+  local url="$1"
+  local code=""
+  code="$(curl -k -s -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 15 "${url}" 2>/dev/null || true)"
+  [[ "${code}" =~ ^[0-9]{3}$ ]] || code="000"
+  printf '%s' "${code}"
 }
 
 wait_for_app_api() {
@@ -1753,8 +1894,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name ${DOMAIN};
 
     ssl_certificate ${cert_fullchain};
@@ -1934,6 +2074,169 @@ show_info() {
   support_info
 }
 
+doctor_ok() {
+  printf "${G}[正常]${NC} %s\n" "$1"
+}
+
+doctor_warn() {
+  printf "${Y}[注意]${NC} %s\n" "$1"
+}
+
+doctor_fail() {
+  printf "${R}[异常]${NC} %s\n" "$1"
+}
+
+do_doctor() {
+  require_systemd
+  load_runtime_state_from_env
+
+  local failures=0
+  local warnings=0
+  local code="" resolved_ips="" public_ip="" unit_dir="" active_state="" enabled_state=""
+
+  print_banner
+  printf '实例自检\n'
+  print_line
+  printf '安装目录: %s\n' "${INSTALL_DIR}"
+  printf '服务名: %s\n' "${SERVICE_NAME}"
+  [[ -n "${ACCESS_URL}" ]] && printf '访问地址: %s\n' "${ACCESS_URL}"
+  print_line
+
+  if [[ -d "${INSTALL_DIR}" ]]; then
+    doctor_ok "安装目录存在"
+  else
+    doctor_fail "安装目录不存在: ${INSTALL_DIR}"
+    failures=$((failures + 1))
+  fi
+
+  if [[ -x "${INSTALL_DIR}/epusdt" ]]; then
+    doctor_ok "程序文件存在并可执行"
+  else
+    doctor_fail "未找到可执行文件: ${INSTALL_DIR}/epusdt"
+    failures=$((failures + 1))
+  fi
+
+  if [[ -f "${INSTALL_DIR}/.env" ]]; then
+    doctor_ok ".env 配置文件存在"
+  else
+    doctor_fail "未找到 .env 配置文件"
+    failures=$((failures + 1))
+  fi
+
+  if service_exists; then
+    doctor_ok "systemd 服务存在"
+    unit_dir="$(service_working_directory || true)"
+    if [[ -n "${unit_dir}" && "${unit_dir}" == "${INSTALL_DIR}" ]]; then
+      doctor_ok "服务目录匹配当前安装目录"
+    elif [[ -n "${unit_dir}" ]]; then
+      doctor_fail "服务目录不匹配，当前服务指向: ${unit_dir}"
+      failures=$((failures + 1))
+    fi
+  else
+    doctor_fail "systemd 服务不存在，请先安装或接管"
+    failures=$((failures + 1))
+  fi
+
+  active_state="$(systemctl is-active "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ "${active_state}" == "active" ]]; then
+    doctor_ok "服务运行中"
+  else
+    doctor_fail "服务未运行，当前状态: ${active_state:-未知}"
+    failures=$((failures + 1))
+  fi
+
+  enabled_state="$(systemctl is-enabled "${SERVICE_NAME}.service" 2>/dev/null || true)"
+  if [[ "${enabled_state}" == "enabled" ]]; then
+    doctor_ok "已设置开机自启"
+  else
+    doctor_fail "未设置开机自启，当前状态: ${enabled_state:-未知}"
+    failures=$((failures + 1))
+  fi
+
+  if [[ -n "${PORT}" ]]; then
+    if service_port_owner_matches; then
+      doctor_ok "端口 ${PORT} 由当前 systemd 主进程监听"
+    else
+      doctor_fail "端口 ${PORT} 未被当前服务正确监听"
+      port_listeners "${PORT}" || true
+      failures=$((failures + 1))
+    fi
+
+    code="$(http_code "http://127.0.0.1:${PORT}/admin/api/v1/auth/init-password-hash")"
+    if [[ "${code}" =~ ^(200|301|302|307|308)$ ]]; then
+      doctor_ok "本机应用接口可访问，HTTP ${code}"
+    else
+      doctor_fail "本机应用接口不可访问，HTTP ${code}"
+      failures=$((failures + 1))
+    fi
+  else
+    doctor_fail "未识别监听端口"
+    failures=$((failures + 1))
+  fi
+
+  if [[ -n "${DOMAIN}" ]]; then
+    public_ip="$(detect_public_ip)"
+    resolved_ips="$(resolve_domain_ipv4s "${DOMAIN}" | paste -sd ',' - || true)"
+    [[ -n "${resolved_ips}" ]] || resolved_ips="未解析到 A 记录"
+
+    if domain_points_here "${DOMAIN}"; then
+      doctor_ok "域名解析指向当前服务器"
+    else
+      doctor_fail "域名解析不匹配。当前公网 IP: ${public_ip}，域名解析: ${resolved_ips}"
+      failures=$((failures + 1))
+    fi
+
+    if [[ -n "${NGINX_CONF_PATH}" && -f "${NGINX_CONF_PATH}" ]]; then
+      doctor_ok "Nginx 配置存在: ${NGINX_CONF_PATH}"
+    else
+      doctor_fail "未找到当前域名的 Nginx 配置"
+      failures=$((failures + 1))
+    fi
+
+    if detect_nginx_binary >/dev/null 2>&1; then
+      if "$(detect_nginx_binary)" -t >/dev/null 2>&1; then
+        doctor_ok "Nginx 配置语法正常"
+      else
+        doctor_fail "Nginx 配置语法检查失败，请执行 nginx -t 查看详情"
+        failures=$((failures + 1))
+      fi
+    else
+      doctor_fail "未找到 Nginx"
+      failures=$((failures + 1))
+    fi
+
+    code="$(http_code_insecure "https://${DOMAIN}/admin")"
+    if [[ "${code}" =~ ^(200|301|302|307|308)$ ]]; then
+      doctor_ok "HTTPS 后台页面可访问，HTTP ${code}"
+    else
+      doctor_fail "HTTPS 后台页面不可访问，HTTP ${code}"
+      failures=$((failures + 1))
+    fi
+
+    code="$(http_code "http://${DOMAIN}")"
+    if [[ "${code}" =~ ^(301|302|307|308)$ ]]; then
+      doctor_ok "HTTP 已跳转到 HTTPS，HTTP ${code}"
+    else
+      doctor_warn "HTTP 跳转状态不是 30x，当前 HTTP ${code}"
+      warnings=$((warnings + 1))
+    fi
+  else
+    doctor_warn "当前是端口访问模式，未配置域名 HTTPS"
+    warnings=$((warnings + 1))
+  fi
+
+  print_line
+  if [[ "${failures}" -eq 0 ]]; then
+    success "自检完成，未发现阻塞问题"
+  else
+    error "自检发现 ${failures} 个异常，请按上方提示处理后重试"
+  fi
+  [[ "${warnings}" -gt 0 ]] && printf "${Y}[注意]${NC} 另有 %s 个注意项\n" "${warnings}"
+  support_info
+
+  [[ "${failures}" -eq 0 ]]
+}
+
 do_install() {
   require_root
   require_systemd
@@ -2014,6 +2317,7 @@ do_update() {
   load_runtime_state_from_env
   ensure_existing_instance
   service_exists || die "未找到服务 ${SERVICE_NAME}，无法执行更新，请先完成安装或修复服务"
+  ensure_service_directory_matches
   resolve_group
   validate_runtime_settings
 
@@ -2070,6 +2374,7 @@ do_https() {
   ensure_existing_instance
   [[ -x "${INSTALL_DIR}/epusdt" ]] || die "未在 ${INSTALL_DIR} 发现 epusdt，请先安装"
   service_exists || die "未找到服务 ${SERVICE_NAME}，无法配置 HTTPS，请先完成安装或修复服务"
+  ensure_service_directory_matches
   prepare_https_values
   set_env_value "${INSTALL_DIR}/.env" "app_uri" "${APP_URI}"
   set_env_value "${INSTALL_DIR}/.env" "http_listen" "${BIND_ADDR}:${PORT}"
@@ -2090,6 +2395,7 @@ do_uninstall() {
   require_systemd
   load_runtime_state_from_env
   ensure_existing_instance
+  ensure_service_directory_matches
   resolve_group
   validate_runtime_settings
 
@@ -2128,10 +2434,16 @@ do_uninstall() {
     else
       remove_https=0
     fi
-    prompt_yes_no "删除服务用户 ${SERVICE_USER}" 1 && remove_user=1 || remove_user=0
+    if should_remove_service_user_by_default; then
+      prompt_yes_no "删除服务用户 ${SERVICE_USER}" 1 && remove_user=1 || remove_user=0
+    else
+      remove_user=0
+      warn "服务用户 ${SERVICE_USER} 可能是共享用户，默认保留不删除"
+    fi
   else
     [[ "${FORCE}" -eq 1 ]] || die "非交互卸载请加 --force"
     confirm_uninstall=1
+    should_remove_service_user_by_default && remove_user=1 || remove_user=0
   fi
 
   [[ "${confirm_uninstall}" -eq 1 ]] || return 0
@@ -2181,8 +2493,10 @@ do_start() {
   require_systemd
   load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
+  ensure_service_directory_matches
   systemctl start "${SERVICE_NAME}.service"
   ensure_service_owns_port
+  wait_for_app_api
   success "服务已启动: ${SERVICE_NAME}"
   support_info
 }
@@ -2192,8 +2506,10 @@ do_restart() {
   require_systemd
   load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
+  ensure_service_directory_matches
   systemctl restart "${SERVICE_NAME}.service"
   ensure_service_owns_port
+  wait_for_app_api
   success "服务已重启: ${SERVICE_NAME}"
   support_info
 }
@@ -2201,7 +2517,9 @@ do_restart() {
 do_stop() {
   require_root
   require_systemd
+  load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
+  ensure_service_directory_matches
   systemctl stop "${SERVICE_NAME}.service"
   success "服务已停止: ${SERVICE_NAME}"
   support_info
@@ -2211,14 +2529,17 @@ do_status() {
   require_systemd
   load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
-  systemctl status "${SERVICE_NAME}.service" --no-pager
+  ensure_service_directory_matches
+  systemctl status "${SERVICE_NAME}.service" --no-pager || true
   warn_if_service_port_not_owned
 }
 
 do_logs() {
   require_systemd
+  load_runtime_state_from_env
   service_exists || die "未找到服务 ${SERVICE_NAME}，请先完成安装"
-  journalctl -u "${SERVICE_NAME}.service" -n 200 --no-pager
+  ensure_service_directory_matches
+  journalctl -u "${SERVICE_NAME}.service" -n 200 --no-pager || true
 }
 
 menu_manage() {
@@ -2257,12 +2578,13 @@ menu_loop() {
     menu_item "3" "一键更新" "拉取官方最新 release"
     menu_item "4" "运行管理" "状态 / 日志 / 启停 / 补配 HTTPS"
     menu_item "5" "实例信息" "目录 / 版本 / 地址 / 服务状态"
-    menu_item "6" "一键卸载" "删除服务与部署文件"
+    menu_item "6" "一键自检" "服务 / 端口 / HTTPS / 解析"
+    menu_item "7" "一键卸载" "删除服务与部署文件"
     menu_item "0" "退出脚本" "结束本次操作"
     printf '\n'
 
     local choice=""
-    choice="$(prompt_menu_choice "请选择编号" "0 1 2 3 4 5 6")"
+    choice="$(prompt_menu_choice "请选择编号" "0 1 2 3 4 5 6 7")"
     case "${choice}" in
       1)
         FROM_MENU=1
@@ -2291,6 +2613,11 @@ menu_loop() {
         ;;
       6)
         FROM_MENU=1
+        do_doctor || true
+        pause_if_interactive
+        ;;
+      7)
+        FROM_MENU=1
         do_uninstall
         pause_if_interactive
         ;;
@@ -2306,6 +2633,7 @@ case "${COMMAND}" in
   adopt) do_adopt ;;
   update) do_update ;;
   https) do_https ;;
+  doctor|check) do_doctor || exit $? ;;
   info|version) show_info ;;
   uninstall) do_uninstall ;;
   start) do_start ;;
