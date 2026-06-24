@@ -22,7 +22,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 | ⚡ 一键安装 | 自动下载官方 release，完成部署并输出后台账号密码 |
 | 🔁 一键更新 | 拉取官方最新版本，保留配置和数据库 |
 | 🧲 接管旧实例 | 保留原有 `.env` 和 `sqlite` 数据，迁移到脚本托管 |
-| 🔐 HTTPS | 填写域名后自动申请证书、配置反代、强制 HTTPS |
+| 🔐 HTTPS | 填写域名即可自动申请证书、配置反代、强制 HTTPS |
 | 🛠️ 日常管理 | 状态、日志、启动、停止、重启 |
 | 🧹 一键卸载 | 删除服务、部署目录、证书与 Nginx 配置 |
 | ♻️ 开机自启 | 全新安装或接管后自动写入 `systemd` 并启用 |
@@ -67,6 +67,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 - 强制跳转 `https://`
 
 域名未指向当前服务器时，脚本会停止并给出明确提示。
+整个流程不需要额外输入证书信息。
 
 ## ✅ 安装结果
 

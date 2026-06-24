@@ -187,9 +187,11 @@ usage() {
   --app-name NAME
   --api-rate-url URL
   --nginx-conf-path PATH
-  --acme-email EMAIL
   --non-interactive
   --force
+
+说明：
+  填写域名后会自动使用 Let's Encrypt 申请证书，并强制跳转 HTTPS。
 EOF
   support_info
 }
@@ -1218,7 +1220,7 @@ ensure_acme_installed() {
     return 0
   fi
 
-  info "安装 acme.sh"
+  info "安装证书申请工具"
   curl -fsSL https://get.acme.sh | sh -s email="${ACME_EMAIL}"
   [[ -x "${acme_sh}" ]] || die "acme.sh 安装失败"
 }
@@ -1334,7 +1336,7 @@ issue_certificate() {
   "${acme_sh}" --set-default-ca --server letsencrypt >/dev/null
   "${acme_sh}" --register-account -m "${ACME_EMAIL}" --server letsencrypt >/dev/null 2>&1 || true
 
-  info "开始申请证书"
+  info "使用 Let's Encrypt 自动申请 HTTPS 证书"
   "${acme_sh}" --issue -d "${DOMAIN}" -w "${acme_webroot}" --server letsencrypt --keylength ec-256
   "${acme_sh}" --install-cert -d "${DOMAIN}" \
     --ecc \
@@ -1715,7 +1717,7 @@ menu_loop() {
     menu_item "1" "开始部署" "自动安装并回显后台账号密码"
     menu_item "2" "接管旧实例" "保留原数据并纳入脚本托管"
     menu_item "3" "一键更新" "拉取官方最新 release"
-    menu_item "4" "配置 HTTPS" "申请证书并强制跳转 https"
+    menu_item "4" "配置 HTTPS" "输入域名后自动申请证书并强制 HTTPS"
     menu_item "5" "运行管理" "状态 / 日志 / 启停 / 重启"
     menu_item "6" "实例信息" "目录 / 版本 / 地址 / 服务状态"
     menu_item "7" "一键卸载" "删除服务与部署文件"
