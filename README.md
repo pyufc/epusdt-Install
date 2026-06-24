@@ -13,16 +13,16 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/main/install.sh)
 ```
 
-运行后按菜单选择安装、接管、更新、HTTPS、管理或卸载。
+运行后按菜单选择部署、接管、更新、管理、查看信息或卸载。
 
 ## 🧩 功能亮点
 
 | 功能 | 说明 |
 | --- | --- |
-| ⚡ 一键安装 | 自动下载官方 release，完成部署并输出后台账号密码 |
+| ⚡ 一键安装 | 自动下载官方 release，填域名自动 HTTPS，完成后输出后台账号密码 |
 | 🔁 一键更新 | 拉取官方最新版本，保留配置和数据库 |
 | 🧲 接管旧实例 | 保留原有 `.env` 和 `sqlite` 数据，迁移到脚本托管 |
-| 🔐 HTTPS | 填写域名即可自动申请证书、配置反代、强制 HTTPS |
+| 🔐 HTTPS | 部署时填写域名即可自动申请证书、配置反代、强制 HTTPS |
 | 🛠️ 日常管理 | 状态、日志、启动、停止、重启 |
 | 🧹 一键卸载 | 删除服务、部署目录、证书与 Nginx 配置 |
 | ♻️ 开机自启 | 全新安装或接管后自动写入 `systemd` 并启用 |
@@ -30,6 +30,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 ## 🧲 接管旧实例
 
 适合已经手动部署过官方 `Epusdt`，并且还在使用本地 `sqlite` 的实例。
+如果在已有实例目录里选择“开始部署”，脚本会提示改为接管，避免覆盖旧数据。
 
 接管时会保留：
 
@@ -43,6 +44,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Yufeifeio/epusdt-Install/mai
 - 旧 `systemd` 服务
 - 旧 Docker 容器
 - 旧手动守护进程
+- 常见手动启动：`epusdt http start`
 
 如果端口仍被占用，脚本会提示先手动停止旧实例，再重新运行一键入口接管。
 

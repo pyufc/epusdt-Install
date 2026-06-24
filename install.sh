@@ -165,7 +165,6 @@ usage() {
   bash install.sh install [参数]
   bash install.sh adopt [参数]
   bash install.sh update [参数]
-  bash install.sh https [参数]
   bash install.sh info
   bash install.sh uninstall [参数]
   bash install.sh start
@@ -226,6 +225,31 @@ done
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+curl_download_file() {
+  local url="$1"
+  local output="$2"
+  local label="$3"
+  local args=(
+    --fail
+    --location
+    --show-error
+    --connect-timeout 20
+    --max-time 900
+    --retry 3
+    --retry-delay 2
+    --speed-time 90
+    --speed-limit 1024
+    -o "${output}"
+    "${url}"
+  )
+
+  if [[ -t 1 ]]; then
+    curl --progress-bar "${args[@]}" || die "${label}下载失败。请检查服务器到 GitHub 的网络连接后重试：${url}"
+  else
+    curl --silent "${args[@]}" || die "${label}下载失败。请检查服务器到 GitHub 的网络连接后重试：${url}"
+  fi
 }
 
 validate_service_name() {
@@ -620,7 +644,7 @@ validate_domain_for_https() {
 
 get_latest_version() {
   local response=""
-  response="$(curl -fsSL "${REPO_API_URL}" 2>/dev/null)" || die "获取官方最新版本失败，请检查 GitHub 连通性"
+  response="$(curl --fail --silent --show-error --location --connect-timeout 20 --max-time 60 --retry 3 "${REPO_API_URL}" 2>/dev/null)" || die "获取官方最新版本失败，请检查服务器到 GitHub API 的网络连接"
   printf '%s' "${response}" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
 }
 
@@ -645,9 +669,9 @@ download_release() {
   local asset_url="${REPO_RELEASE_BASE}/${version}/${asset_name}"
   local sums_url="${REPO_RELEASE_BASE}/${version}/SHA256SUMS"
 
-  info "开始下载 ${asset_name}"
-  curl -fsSL -o "${tmpdir}/${asset_name}" "${asset_url}" || die "下载失败: ${asset_url}"
-  curl -fsSL -o "${tmpdir}/SHA256SUMS" "${sums_url}" || die "下载校验文件失败: ${sums_url}"
+  info "下载官方发布包 ${asset_name}（GitHub Release，网络慢时请等待进度条）"
+  curl_download_file "${asset_url}" "${tmpdir}/${asset_name}" "官方发布包"
+  curl_download_file "${sums_url}" "${tmpdir}/SHA256SUMS" "校验文件"
 
   if ! grep -q " ${asset_name}$" "${tmpdir}/SHA256SUMS"; then
     die "未找到 ${asset_name} 的校验信息"
@@ -657,6 +681,7 @@ download_release() {
     cd "${tmpdir}"
     grep " ${asset_name}$" SHA256SUMS | sha256sum -c -
   )
+  success "官方发布包校验通过"
 
   tar -xzf "${tmpdir}/${asset_name}" -C "${tmpdir}"
   [[ -f "${tmpdir}/epusdt" ]] || die "压缩包内未找到 epusdt"
@@ -737,7 +762,10 @@ prepare_install_values() {
   fi
 
   if [[ "${NON_INTERACTIVE}" -eq 0 && ( "${COMMAND}" == "install" || "${FROM_MENU}" -eq 1 ) ]]; then
-    INSTALL_DIR="$(prompt_default "安装目录" "${INSTALL_DIR}")"
+    if [[ "${INSTALL_DIR_EXPLICIT}" -eq 0 ]]; then
+      INSTALL_DIR="$(prompt_default "安装目录" "${INSTALL_DIR}")"
+      INSTALL_DIR_EXPLICIT=1
+    fi
     VERSION="$(prompt_default "版本（latest 或具体 tag）" "${VERSION}")"
     DOMAIN="$(prompt_default "域名（留空则端口访问）" "${DOMAIN}")"
     PORT="$(prompt_default "监听端口" "${PORT}")"
@@ -972,7 +1000,12 @@ EOF
 
 stop_conflicting_instance_processes() {
   local pids=""
-  pids="$(pgrep -f "${INSTALL_DIR}/epusdt --config ${INSTALL_DIR} http start" || true)"
+  pids="$(
+    {
+      pgrep -f "${INSTALL_DIR}/epusdt --config ${INSTALL_DIR} http start" || true
+      pgrep -f "${INSTALL_DIR}/epusdt http start" || true
+    } | awk '!seen[$0]++'
+  )"
   [[ -n "${pids}" ]] || return 0
 
   info "发现旧的手动运行进程，准备切换为 systemd 托管"
@@ -984,7 +1017,12 @@ stop_conflicting_instance_processes() {
 
   sleep 2
 
-  pids="$(pgrep -f "${INSTALL_DIR}/epusdt --config ${INSTALL_DIR} http start" || true)"
+  pids="$(
+    {
+      pgrep -f "${INSTALL_DIR}/epusdt --config ${INSTALL_DIR} http start" || true
+      pgrep -f "${INSTALL_DIR}/epusdt http start" || true
+    } | awk '!seen[$0]++'
+  )"
   if [[ -n "${pids}" ]]; then
     while IFS= read -r pid; do
       [[ -n "${pid}" ]] || continue
@@ -1221,7 +1259,7 @@ ensure_acme_installed() {
   fi
 
   info "安装证书申请工具"
-  curl -fsSL https://get.acme.sh | sh -s email="${ACME_EMAIL}"
+  curl --fail --silent --show-error --location --connect-timeout 20 --max-time 180 --retry 3 https://get.acme.sh | sh -s email="${ACME_EMAIL}"
   [[ -x "${acme_sh}" ]] || die "acme.sh 安装失败"
 }
 
@@ -1401,6 +1439,38 @@ print_adopt_summary() {
   support_info
 }
 
+run_adopt_takeover() {
+  if service_exists && [[ -f "$(service_unit_path)" ]] && ! grep -qF "WorkingDirectory=${INSTALL_DIR}" "$(service_unit_path)"; then
+    die "服务 ${SERVICE_NAME} 已存在，但不属于当前目录 ${INSTALL_DIR}，请更换服务名后再接管"
+  fi
+
+  if service_exists; then
+    info "发现同名服务 ${SERVICE_NAME}，将覆盖服务定义并重新接管"
+    systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  fi
+
+  ensure_service_account
+  resolve_group
+  install_packages "0"
+  chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}"
+  cleanup_safe_install_artifacts
+  stop_existing_systemd_owner
+  stop_existing_docker_owner
+  stop_conflicting_instance_processes
+  ensure_adopt_port_released
+  write_systemd_service
+  systemctl restart "${SERVICE_NAME}.service"
+  wait_for_app_api
+  save_state
+  print_adopt_summary
+}
+
+adopt_current_instance() {
+  reset_adopt_actions
+  NON_INTERACTIVE=1 prepare_adopt_values
+  run_adopt_takeover
+}
+
 show_info() {
   local local_version="未知"
   local latest_version="未知"
@@ -1437,11 +1507,29 @@ show_info() {
 do_install() {
   require_root
   require_systemd
-  prepare_install_values
 
-  if [[ -f "${INSTALL_DIR}/epusdt" && "${FORCE}" -ne 1 ]]; then
-    die "${INSTALL_DIR} 已存在 epusdt，请使用一键更新；如果要覆盖重装请加 --force"
+  if [[ -z "${INSTALL_DIR}" ]]; then
+    INSTALL_DIR="$(suggest_install_dir)"
   fi
+
+  if [[ "${NON_INTERACTIVE}" -eq 0 && ( "${COMMAND}" == "install" || "${FROM_MENU}" -eq 1 ) && "${INSTALL_DIR_EXPLICIT}" -eq 0 ]]; then
+    INSTALL_DIR="$(prompt_default "安装目录" "${INSTALL_DIR}")"
+    INSTALL_DIR_EXPLICIT=1
+  fi
+
+  validate_install_dir "${INSTALL_DIR}"
+  if [[ -f "${INSTALL_DIR}/epusdt" && "${FORCE}" -ne 1 ]]; then
+    if [[ "${NON_INTERACTIVE}" -eq 0 ]]; then
+      warn "${INSTALL_DIR} 已存在 epusdt，不建议覆盖重装"
+      if [[ -f "${INSTALL_DIR}/.env" ]] && prompt_yes_no "改为接管旧实例并保留数据" 1; then
+        adopt_current_instance
+        return 0
+      fi
+    fi
+    die "${INSTALL_DIR} 已存在 epusdt。请选择接管旧实例或一键更新；如果确认覆盖重装请加 --force"
+  fi
+
+  prepare_install_values
 
   if service_exists && [[ "${FORCE}" -ne 1 ]]; then
     die "服务 ${SERVICE_NAME} 已存在，请更换服务名，或确认后使用 --force 覆盖"
@@ -1485,30 +1573,7 @@ do_adopt() {
   require_systemd
   reset_adopt_actions
   prepare_adopt_values
-
-  if service_exists && [[ -f "$(service_unit_path)" ]] && ! grep -qF "WorkingDirectory=${INSTALL_DIR}" "$(service_unit_path)"; then
-    die "服务 ${SERVICE_NAME} 已存在，但不属于当前目录 ${INSTALL_DIR}，请更换服务名后再接管"
-  fi
-
-  if service_exists; then
-    info "发现同名服务 ${SERVICE_NAME}，将覆盖服务定义并重新接管"
-    systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
-  fi
-
-  ensure_service_account
-  resolve_group
-  install_packages "0"
-  chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}"
-  cleanup_safe_install_artifacts
-  stop_existing_systemd_owner
-  stop_existing_docker_owner
-  stop_conflicting_instance_processes
-  ensure_adopt_port_released
-  write_systemd_service
-  systemctl restart "${SERVICE_NAME}.service"
-  wait_for_app_api
-  save_state
-  print_adopt_summary
+  run_adopt_takeover
 }
 
 do_update() {
@@ -1693,6 +1758,7 @@ menu_manage() {
     menu_item "3" "启动服务" "启动当前实例"
     menu_item "4" "重启服务" "重启当前实例"
     menu_item "5" "停止服务" "停止当前实例"
+    menu_item "6" "补配 HTTPS" "首次部署未填域名时使用"
     menu_item "0" "返回上级" "返回主菜单"
     printf '\n'
 
@@ -1704,6 +1770,7 @@ menu_manage() {
       3) do_start ;;
       4) do_restart ;;
       5) do_stop ;;
+      6) do_https ;;
       0) return 0 ;;
       *) warn "无效选项" ;;
     esac
@@ -1714,13 +1781,12 @@ menu_manage() {
 menu_loop() {
   while true; do
     print_banner
-    menu_item "1" "开始部署" "自动安装并回显后台账号密码"
+    menu_item "1" "开始部署" "填域名自动 HTTPS，回显账号密码"
     menu_item "2" "接管旧实例" "保留原数据并纳入脚本托管"
     menu_item "3" "一键更新" "拉取官方最新 release"
-    menu_item "4" "配置 HTTPS" "输入域名后自动申请证书并强制 HTTPS"
-    menu_item "5" "运行管理" "状态 / 日志 / 启停 / 重启"
-    menu_item "6" "实例信息" "目录 / 版本 / 地址 / 服务状态"
-    menu_item "7" "一键卸载" "删除服务与部署文件"
+    menu_item "4" "运行管理" "状态 / 日志 / 启停 / 补配 HTTPS"
+    menu_item "5" "实例信息" "目录 / 版本 / 地址 / 服务状态"
+    menu_item "6" "一键卸载" "删除服务与部署文件"
     menu_item "0" "退出脚本" "结束本次操作"
     printf '\n'
 
@@ -1744,19 +1810,15 @@ menu_loop() {
         ;;
       4)
         FROM_MENU=1
-        do_https
-        ;;
-      5)
-        FROM_MENU=1
         menu_manage
         pause_if_interactive
         ;;
-      6)
+      5)
         FROM_MENU=1
         show_info
         pause_if_interactive
         ;;
-      7)
+      6)
         FROM_MENU=1
         do_uninstall
         pause_if_interactive
