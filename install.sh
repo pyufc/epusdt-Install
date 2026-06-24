@@ -710,7 +710,7 @@ normalize_version() {
 get_installed_version() {
   local output version
   [[ -x "${INSTALL_DIR}/epusdt" ]] || return 1
-  output="$("${INSTALL_DIR}/epusdt" version 2>/dev/null || true)"
+  output="$(epusdt_version_output 2>/dev/null || true)"
   version="$(printf '%s\n' "${output}" | sed -n 's/^version: //p' | head -n1)"
   [[ -n "${version}" ]] || return 1
   if [[ "${version}" != v* && "${version}" != "unknown" ]]; then
@@ -1285,6 +1285,38 @@ update_release_files() {
   chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}"
 }
 
+epusdt_version_output() {
+  local quoted_dir quoted_bin
+  [[ -x "${INSTALL_DIR}/epusdt" ]] || return 1
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+      ensure_service_account
+      resolve_group
+    fi
+
+    if command_exists runuser; then
+      (
+        cd "${INSTALL_DIR}"
+        runuser -u "${SERVICE_USER}" -- "${INSTALL_DIR}/epusdt" --config "${INSTALL_DIR}" version
+      )
+      return $?
+    fi
+
+    if command_exists su; then
+      printf -v quoted_dir '%q' "${INSTALL_DIR}"
+      printf -v quoted_bin '%q' "${INSTALL_DIR}/epusdt"
+      su -s /bin/sh -c "cd ${quoted_dir} && ${quoted_bin} --config ${quoted_dir} version" "${SERVICE_USER}"
+      return $?
+    fi
+  fi
+
+  (
+    cd "${INSTALL_DIR}"
+    "${INSTALL_DIR}/epusdt" --config "${INSTALL_DIR}" version
+  )
+}
+
 cleanup_safe_install_artifacts() {
   rm -f "${INSTALL_DIR}/.env.example" "${INSTALL_DIR}/SHA256SUMS"
   find "${INSTALL_DIR}" -maxdepth 1 -type f \( -name 'epusdt-*.tar.gz' -o -name 'SHA256SUMS*' \) -delete 2>/dev/null || true
@@ -1297,6 +1329,18 @@ reset_generated_static_files() {
   fi
 }
 
+reset_static_files_if_unsafe() {
+  local owner=""
+  validate_install_dir "${INSTALL_DIR}"
+  [[ -d "${INSTALL_DIR}/www" ]] || return 0
+
+  owner="$(detect_path_owner_user "${INSTALL_DIR}/www")"
+  if [[ "${owner}" != "${SERVICE_USER}" ]]; then
+    warn "检测到前端静态目录归属为 ${owner}，将修正为 ${SERVICE_USER}:${SERVICE_GROUP}"
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}/www"
+  fi
+}
+
 repair_install_permissions() {
   validate_install_dir "${INSTALL_DIR}"
   [[ -d "${INSTALL_DIR}" ]] || return 0
@@ -1305,6 +1349,11 @@ repair_install_permissions() {
 }
 
 prepare_instance_for_service_start() {
+  reset_static_files_if_unsafe
+  repair_install_permissions
+}
+
+prepare_instance_for_update_restart() {
   reset_generated_static_files
   repair_install_permissions
 }
@@ -1620,9 +1669,10 @@ show_info() {
   load_runtime_state_from_env
 
   if [[ -x "${INSTALL_DIR}/epusdt" ]]; then
-    version_output="$("${INSTALL_DIR}/epusdt" version 2>/dev/null || true)"
+    version_output="$(epusdt_version_output 2>/dev/null || true)"
     local_version="$(printf '%s\n' "${version_output}" | sed -n 's/^version: //p' | head -n1)"
     [[ -n "${local_version}" ]] || local_version="未知"
+    repair_install_permissions >/dev/null 2>&1 || true
   fi
 
   latest_version="$(get_latest_version 2>/dev/null || true)"
@@ -1692,7 +1742,7 @@ do_install() {
   install_release_files "${tmpdir}" "install"
   write_systemd_service
   enable_https_if_needed
-  prepare_instance_for_service_start
+  prepare_instance_for_update_restart
   systemctl restart "${SERVICE_NAME}.service"
   wait_for_app_api
 
@@ -1729,6 +1779,7 @@ do_update() {
   [[ -x "${INSTALL_DIR}/epusdt" ]] || die "未在 ${INSTALL_DIR} 发现 epusdt"
   ensure_service_account
   resolve_group
+  prepare_instance_for_service_start
 
   local installed_version
   installed_version="$(get_installed_version || true)"
@@ -1754,7 +1805,7 @@ do_update() {
 
   download_release "${VERSION}" "${arch}" "${tmpdir}"
   update_release_files "${tmpdir}"
-  prepare_instance_for_service_start
+  prepare_instance_for_update_restart
   systemctl restart "${SERVICE_NAME}.service"
 
   if [[ -n "${PORT}" ]] && wait_for_http "http://127.0.0.1:${PORT}/admin/api/v1/auth/init-password-hash" 40; then
@@ -1781,9 +1832,7 @@ do_https() {
   set_env_value "${INSTALL_DIR}/.env" "http_listen" "${BIND_ADDR}:${PORT}"
   prepare_instance_for_service_start
 
-  if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-    systemctl restart "${SERVICE_NAME}.service"
-  fi
+  systemctl restart "${SERVICE_NAME}.service"
 
   wait_for_app_api
   enable_https_if_needed
