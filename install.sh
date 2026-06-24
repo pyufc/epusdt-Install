@@ -705,6 +705,18 @@ normalize_version() {
   printf '%s' "${version}"
 }
 
+get_installed_version() {
+  local output version
+  [[ -x "${INSTALL_DIR}/epusdt" ]] || return 1
+  output="$("${INSTALL_DIR}/epusdt" version 2>/dev/null || true)"
+  version="$(printf '%s\n' "${output}" | sed -n 's/^version: //p' | head -n1)"
+  [[ -n "${version}" ]] || return 1
+  if [[ "${version}" != v* && "${version}" != "unknown" ]]; then
+    version="v${version}"
+  fi
+  printf '%s' "${version}"
+}
+
 download_release() {
   local version="$1"
   local arch="$2"
@@ -1683,7 +1695,18 @@ do_update() {
 
   [[ -x "${INSTALL_DIR}/epusdt" ]] || die "未在 ${INSTALL_DIR} 发现 epusdt"
 
+  local installed_version
+  installed_version="$(get_installed_version || true)"
   VERSION="$(normalize_version "${VERSION}")"
+
+  if [[ -n "${installed_version}" && "${installed_version}" == "${VERSION}" ]]; then
+    success "当前已是最新版: ${VERSION}"
+    save_state
+    [[ -n "${ACCESS_URL}" ]] && printf '访问地址: %s\n' "${ACCESS_URL}"
+    support_info
+    return 0
+  fi
+
   ensure_service_account
   resolve_group
   install_packages "0"
