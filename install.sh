@@ -4,6 +4,8 @@ set -euo pipefail
 STATE_FILE="/etc/epusdt-one-click.env"
 REPO_API_URL="https://api.github.com/repos/GMWalletApp/epusdt/releases/latest"
 REPO_RELEASE_BASE="https://github.com/GMWalletApp/epusdt/releases/download"
+ORIGINAL_PWD="$(pwd -P 2>/dev/null || printf '/')"
+cd / || true
 
 if [[ -f "${STATE_FILE}" ]]; then
   # shellcheck disable=SC1090
@@ -12,7 +14,7 @@ fi
 
 suggest_install_dir() {
   local state_dir="${EPUSDT_INSTALL_DIR:-}"
-  local cwd="${PWD}"
+  local cwd="${ORIGINAL_PWD:-}"
   if [[ -n "${cwd}" && "${cwd}" != "/" && "${cwd}" != "/root" && ! "${cwd}" =~ [[:space:]] ]]; then
     printf '%s' "${cwd}"
     return 0
@@ -1468,7 +1470,7 @@ EOF
 }
 
 issue_certificate() {
-  local acme_sh cert_dir cert_key cert_fullchain nginx_bin acme_webroot
+  local acme_sh cert_dir cert_key cert_fullchain nginx_bin acme_webroot issue_output issue_status
   acme_sh="$(acme_sh_path)"
   cert_dir="/etc/ssl/epusdt/${DOMAIN}"
   cert_key="${cert_dir}/privkey.pem"
@@ -1483,7 +1485,18 @@ issue_certificate() {
   "${acme_sh}" --register-account -m "${ACME_EMAIL}" --server letsencrypt >/dev/null 2>&1 || true
 
   info "使用 Let's Encrypt 自动申请 HTTPS 证书"
-  "${acme_sh}" --issue -d "${DOMAIN}" -w "${acme_webroot}" --server letsencrypt --keylength ec-256
+  set +e
+  issue_output="$("${acme_sh}" --issue -d "${DOMAIN}" -w "${acme_webroot}" --server letsencrypt --keylength ec-256 2>&1)"
+  issue_status=$?
+  set -e
+  printf '%s\n' "${issue_output}"
+  if [[ "${issue_status}" -ne 0 ]]; then
+    if [[ -f "${HOME}/.acme.sh/${DOMAIN}_ecc/${DOMAIN}.cer" || -f "${HOME}/.acme.sh/${DOMAIN}/${DOMAIN}.cer" ]] && printf '%s\n' "${issue_output}" | grep -Eq "Domains not changed|Skipping\\. Next renewal time|Add '--force' to force renewal"; then
+      warn "证书已存在且未到续期时间，将复用现有证书继续配置 HTTPS"
+    else
+      die "HTTPS 证书申请失败，请检查上面的 acme.sh 输出"
+    fi
+  fi
   "${acme_sh}" --install-cert -d "${DOMAIN}" \
     --ecc \
     --key-file "${cert_key}" \
